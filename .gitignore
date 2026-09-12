@@ -1,2 +1,10 @@
 cyhi-logs/.local/
 .claude/settings.local.json
+/target/
+__pycache__/
+*.pyc
+tests/fixtures/nested_calls
+tests/fixtures/null_pointer
+tests/fixtures/divide_zero
+tests/fixtures/assertion_failure
+tests/fixtures/infinite_loop

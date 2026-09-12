@@ -1,0 +1,27 @@
+# TraceCLI configuration.
+#
+# [llm.*] tables are owned by Part 3 (LLM Engine). Other TraceCLI
+# components may add their own top-level tables to this same file later;
+# tracecli_llm.config only reads the [llm] table and ignores the rest.
+#
+# API keys are never stored here. Set the environment variable named by
+# api_key_env instead (default: GEMINI_API_KEY).
+
+[llm]
+api_key_env = "GEMINI_API_KEY"
+
+[llm.planner]
+provider = "gemini"
+model = "gemini-2.5-flash-lite"
+temperature = 0.0
+max_output_tokens = 1024
+timeout_s = 20
+max_retries = 2
+
+[llm.diagnosis]
+provider = "gemini"
+model = "gemini-2.5-flash"
+temperature = 0.1
+max_output_tokens = 2048
+timeout_s = 30
+max_retries = 2

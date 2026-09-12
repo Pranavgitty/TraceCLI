@@ -1,0 +1,3 @@
+# tracecli_llm (Part 3: LLM Engine) — the only Python runtime dependency
+# in the project. tracecli_debugger (Part 2) remains stdlib-only.
+google-genai>=1.0.0
