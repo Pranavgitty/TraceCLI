@@ -1,37 +1,45 @@
 # Handoff - HACKELBERRY_FINN
 
-> Updated 2026-09-13T02:02:10+05:30 by avikshama2006 (session df06143d-c17, track 4)
+> Updated 2026-09-13T02:34:00+05:30 by atindrak27 (session 0913-0222, track 4)
 > Read this first. The full log is cyhi-logs/session.md.
 
 ## Current state
-Part 1 of TraceCLI (Error & Project Context Layer) is implemented and complete. Greenfield Rust project set up from scratch (no prior Cargo/CLI code existed). `cargo build`/`cargo test` both pass (38 tests). Verified end-to-end against real compiled C++ fixtures (SIGSEGV via null deref, SIGABRT via assert()).
+- **Part 1 (Rust - Error & Project Context Layer)**: Implemented and complete. Greenfield Rust project (`cargo test` passes 38 tests). Verified against real C++ fixtures.
+- **Part 2 (Python - Debugger Engine)**: Implemented and complete. Standalone Python package `tracecli_debugger` (`python3 -m unittest` passes 21 tests against real GDB). Zero external runtime dependencies.
 
 ## Works
+### Part 1: Error & Project Context (Rust)
 - `tracecli run [--context-lines N] <exe> [args...]` executes a target, captures stdout/stderr/exit code/signal/duration, classifies the failure, and prints a pretty-JSON `ErrorContext` to stdout.
 - tracecli mirrors the target's exit status (same code, or 128+signal) so it composes in shell scripts.
-- Source location extraction handles both gcc/clang colon diagnostics (`file.cpp:142:17: error: ...`) and macOS/BSD libc `assert()` messages (`function main, file x.cpp, line 4.`) via `CppSourceLocationExtractor`, built behind an extensible `SourceLocationExtractor` trait for future languages.
-- Bounded source context (default ±5 lines, configurable, size-capped file read) around a detected failure line.
-- Best-effort build context: compiler + version via `CXX`/`CC`/PATH probing, debug-symbol heuristic via `file`/`nm`. No CMake/Make/Cargo-specific parsing (flagged as an unresolved design gap below).
-- All errors are structured `TraceError` variants, never panics, for: executable not found, permission denied, spawn failure, invalid working dir, source file unavailable, malformed output, invalid CLI args.
+- Source location extraction handles both gcc/clang colon diagnostics (`file.cpp:142:17: error: ...`) and macOS/BSD libc `assert()` messages (`function main, file x.cpp, line 4.`) via `CppSourceLocationExtractor`.
+- Bounded source context around a detected failure line.
+- Best-effort build context: compiler + version probing and debug-symbol heuristic.
+
+### Part 2: Debugger Engine (Python)
+- Structured action validation model (`actions.py`) strictly enforcing vocabulary: `breakpoint`, `continue`, `step`, `next`, `backtrace`, `frame`, `locals`, `variable`, `expression`, `registers` with input sanitization against shell injection.
+- Low-level GDB/MI adapter (`gdb_adapter.py`) running `gdb --interpreter=mi2` with non-blocking raw I/O and async MI stop-detection.
+- High-level `DebuggerSession` (`session.py`) supporting `launch()`, `execute()`, `execute_many()`, and `close()`.
+- Structured evidence model (`evidence.py`) retaining full `raw` MI records while emitting typed events.
+- JSON-over-stdin/stdout subprocess protocol transport (`protocol.py`).
+- Deterministic C++ fixtures for null pointer, divide-by-zero, assertion failure, infinite loop, and nested calls.
+- 21 unit tests in `tests/test_debugger.py` passing under standard library `unittest` and `pytest`.
 
 ## Broken
-Nothing known-broken. Two known low-confidence areas (by design, documented in code):
-- `FailureClassification::CompilationError` heuristic (looks for `: error:` preceded by `file:line[:col]`) can misfire on programs that print similarly shaped text.
-- Signal *names* for anything other than SIGSEGV/SIGABRT/SIGFPE/SIGILL use macOS/BSD numbering and will misreport on Linux (e.g. SIGBUS, SIGUSR1/2). The 4 signals that matter for classification are correct on both platforms.
+- None.
 
 ## Next 3 things
-1. Whoever builds the Python debugger / GDB stage (later part) should consume `ErrorContext` by shelling out to `tracecli run ...` and parsing the JSON on stdout, or by depending on the `tracecli` lib crate directly (`execute_target` + `collect_error_context` in `src/lib.rs`).
-2. If build-system-aware context (CMake/Make/Cargo project detection) becomes valuable, that needs an explicit design decision per AGENTS.md scope rules — not done here.
-3. No CI/lint step wired up yet beyond local `cargo test`/`cargo clippy`/`cargo fmt` — consider adding if the team wants a check before merging further parts.
+1. Connect Part 1 `ErrorContext` to LLM #1 Debug Planner (Part 3) to generate structured actions.
+2. Route structured actions to the Python Debugger Engine via `protocol.py` (JSON-over-stdin/stdout).
+3. Wire structured evidence output into LLM #2 Diagnosis Engine (Part 4) for root-cause analysis.
 
 ## Decisions (and why)
-- No Rust toolchain existed on the machine; installed via `brew install rust` since the entire deliverable requires it.
-- Single crate, lib (`src/lib.rs`) + bin (`src/main.rs`), not a workspace — simplest structure for one component with a clean public API other Rust code can import directly.
-- Dependencies kept to `serde` + `serde_json` only (pre-approved by the spec for serialization). Deliberately avoided `clap` (hand-rolled arg parsing is trivial for this surface and keeps target-program args from ever being misinterpreted as tracecli flags) and `regex` (manual colon/comma splitting was sufficient and avoids a dependency for a fixed, small grammar).
-- `ErrorContext` flattens the spec's conceptual `command` field into `executable` + `arguments` (still has `working_directory` at top level per spec) — a refinement, not a material architecture change.
-- tracecli's own process exit code mirrors the target's exit status (or 128+signal), distinct from `TRACECLI_ERROR_EXIT=2` used when tracecli itself fails before/during execution.
+- Part 1 implemented in Rust (`src/`) for fast execution and exit-code mirroring; Part 2 in Python (`tracecli_debugger/`) for GDB integration.
+- Part 2 treated `continue` as "start or resume": first invocation issues `-exec-run`, subsequent invocations issue `-exec-continue`.
+- Used Python standard library exclusively: zero runtime and test dependencies required.
+- Implemented robust per-frame attribute parsing in backtrace to ensure compatibility across diverse GDB versions.
+- Accepted `{"action": "..."}` as alias for `{"type": "..."}` and `"inspect_variable"` for planner compatibility.
 
 ## Don't retry
-- Don't reach for `regex` or `clap` for this component's scope — deliberately avoided per the spec's "minimize dependencies" rule; hand-rolled parsing already covers everything required.
-- Don't try to parse CMakeLists.txt/Makefile/Cargo.toml for build_configuration — explicitly out of scope pending a design decision (see AGENTS.md-derived spec section 8/13).
-- Don't assume `nm`/`file`-based debug-symbol detection is reliable across platforms — it's a documented weak heuristic, not a hard signal.
+- Don't reach for `regex` or `clap` in Part 1 — hand-rolled parsing avoids heavy external dependencies.
+- Do not use select() over buffered TextIOWrapper.readline(); it causes deadlocks due to Python internal buffer caching.
+- Do not let LLM generate arbitrary GDB commands; always validate through `DebugAction`.
