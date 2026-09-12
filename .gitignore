@@ -8,3 +8,4 @@ tests/fixtures/null_pointer
 tests/fixtures/divide_zero
 tests/fixtures/assertion_failure
 tests/fixtures/infinite_loop
+.tracecli/
