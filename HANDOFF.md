@@ -1,45 +1,41 @@
 # Handoff - HACKELBERRY_FINN
 
-> Updated 2026-09-13T02:34:00+05:30 by atindrak27 (session 0913-0222, track 4)
+> Updated 2026-09-13T03:00:02+05:30 by dhruvipatil2906 (session 6bbe4fc8-00d, track 4)
 > Read this first. The full log is cyhi-logs/session.md.
 
 ## Current state
-- **Part 1 (Rust - Error & Project Context Layer)**: Implemented and complete. Greenfield Rust project (`cargo test` passes 38 tests). Verified against real C++ fixtures.
-- **Part 2 (Python - Debugger Engine)**: Implemented and complete. Standalone Python package `tracecli_debugger` (`python3 -m unittest` passes 21 tests against real GDB). Zero external runtime dependencies.
+- **Part 1 (Rust)**: complete, from origin (avik/atindrak27's session). `ErrorContext` JSON contract in `src/error_context.rs`.
+- **Part 2 (Python `tracecli_debugger`)**: complete, from origin. `DebugAction`/`Evidence` schemas in `actions.py`/`evidence.py`.
+- **Part 3 (Python `tracecli_llm`, this session)**: implemented and unit-tested. `DebugPlanner` (LLM #1) and `DiagnosisEngine` (LLM #2) behind an `LLMProvider` abstraction, `GeminiProvider` the only implementation. 27/27 new tests pass (`python3 -m unittest discover -s tests -p "test_llm_*.py"`), all mocked — no live API key needed.
 
 ## Works
-### Part 1: Error & Project Context (Rust)
-- `tracecli run [--context-lines N] <exe> [args...]` executes a target, captures stdout/stderr/exit code/signal/duration, classifies the failure, and prints a pretty-JSON `ErrorContext` to stdout.
-- tracecli mirrors the target's exit status (same code, or 128+signal) so it composes in shell scripts.
-- Source location extraction handles both gcc/clang colon diagnostics (`file.cpp:142:17: error: ...`) and macOS/BSD libc `assert()` messages (`function main, file x.cpp, line 4.`) via `CppSourceLocationExtractor`.
-- Bounded source context around a detected failure line.
-- Best-effort build context: compiler + version probing and debug-symbol heuristic.
-
-### Part 2: Debugger Engine (Python)
-- Structured action validation model (`actions.py`) strictly enforcing vocabulary: `breakpoint`, `continue`, `step`, `next`, `backtrace`, `frame`, `locals`, `variable`, `expression`, `registers` with input sanitization against shell injection.
-- Low-level GDB/MI adapter (`gdb_adapter.py`) running `gdb --interpreter=mi2` with non-blocking raw I/O and async MI stop-detection.
-- High-level `DebuggerSession` (`session.py`) supporting `launch()`, `execute()`, `execute_many()`, and `close()`.
-- Structured evidence model (`evidence.py`) retaining full `raw` MI records while emitting typed events.
-- JSON-over-stdin/stdout subprocess protocol transport (`protocol.py`).
-- Deterministic C++ fixtures for null pointer, divide-by-zero, assertion failure, infinite loop, and nested calls.
-- 21 unit tests in `tests/test_debugger.py` passing under standard library `unittest` and `pytest`.
+- `tracecli_llm.build_engines()` reads `tracecli.toml` (`[llm.planner]` / `[llm.diagnosis]`, falls back to built-in defaults if the file is absent) and returns a wired `(DebugPlanner, DiagnosisEngine)` pair. API key comes only from `$GEMINI_API_KEY` (name configurable via `api_key_env`), never from the file.
+- `DebugPlanner.plan(error_context, prior_evidence=None) -> PlanResult(actions=[...])`. Every action is validated by running it through Part 2's own `tracecli_debugger.actions.DebugAction.from_dict` before being returned, so the planner can never hand Part 2 something Part 2 would reject.
+- `DiagnosisEngine.diagnose(error_context, evidence) -> Diagnosis` matching spec section 9 exactly (`root_cause`, `evidence`, `reasoning_summary`, `suggested_fix`, `confidence`) with a `.to_dict()` for Part 4 to render.
+- Gemini calls use native structured output (`response_mime_type=application/json` + `response_schema`), are synchronous, and go through the official `google-genai` SDK (the project's one Python runtime dependency, in `requirements.txt`).
+- Bounded retries: transient provider errors (rate limit / timeout / network / 5xx) retry with backoff inside `GeminiProvider` (`max_retries`, default 2); `AuthenticationError` never retries; invalid structured output gets exactly one corrective re-prompt at the planner/diagnosis level, then raises `OutputValidationError`.
+- Token efficiency: `tracecli_llm.context` truncates stdout/stderr tails, drops `build_context`, strips the verbose `raw` GDB/MI field from evidence sent to the model, and caps evidence history to the most recent 40 events.
+- All 4 material architecture decisions (SDK vs HTTP, structured-output mechanism, sync vs async, config format) were confirmed with the user via AskUserQuestion before implementation, per the spec's strict-permission rule; all went with the recommended option.
 
 ## Broken
-- None.
+- None known. `GeminiProvider` has not been exercised against the real Gemini API in this session (no API key in this environment) — only against a fake injected client. Recommend one live smoke test before Part 4 integration.
 
 ## Next 3 things
-1. Connect Part 1 `ErrorContext` to LLM #1 Debug Planner (Part 3) to generate structured actions.
-2. Route structured actions to the Python Debugger Engine via `protocol.py` (JSON-over-stdin/stdout).
-3. Wire structured evidence output into LLM #2 Diagnosis Engine (Part 4) for root-cause analysis.
+1. Part 4: wire `tracecli_llm.build_engines()` into the orchestration loop (`ErrorContext -> Planner -> actions -> tracecli_debugger.DebuggerSession.execute_many() -> evidence -> Planner (repeat) -> DiagnosisEngine -> render`). Planner/diagnosis take plain dicts (JSON already decoded), so no adapter layer is needed between Part 1/Part 2's JSON and Part 3.
+2. Part 4 should decide the loop's stop condition (max rounds, or a planner-signaled "enough evidence") — Part 3 intentionally does not own this per the scope boundary.
+3. Set `GEMINI_API_KEY` and do one live end-to-end run before demo, to confirm real Gemini structured-output responses validate the same way the mocked tests assume.
 
 ## Decisions (and why)
-- Part 1 implemented in Rust (`src/`) for fast execution and exit-code mirroring; Part 2 in Python (`tracecli_debugger/`) for GDB integration.
-- Part 2 treated `continue` as "start or resume": first invocation issues `-exec-run`, subsequent invocations issue `-exec-continue`.
-- Used Python standard library exclusively: zero runtime and test dependencies required.
-- Implemented robust per-frame attribute parsing in backtrace to ensure compatibility across diverse GDB versions.
-- Accepted `{"action": "..."}` as alias for `{"type": "..."}` and `"inspect_variable"` for planner compatibility.
+- New `tracecli_llm/` Python package (not Rust): matches Part 2's language, and Gemini's structured-output SDK is Python-first.
+- `google-genai` SDK over raw HTTP (user-approved): gets native JSON-schema-constrained decoding, retry/timeout primitives, and multi-provider room for free; diverges from Part 2's "zero dependencies" precedent, but that precedent was about avoiding GDB-adjacent deps, not network SDKs.
+- Native Gemini structured output over free-text parsing (user-approved): lowest malformed-output rate; we still validate locally regardless (never trust the provider's schema enforcement alone).
+- Synchronous provider calls (user-approved): matches Part 1's blocking exec and Part 2's blocking GDB/MI session; Part 4's planner<->debugger loop is inherently sequential, so async buys nothing here.
+- `tracecli.toml` + env-var API key (user-approved): matches the spec's sketched config shape; stdlib `tomllib` needs no new dependency.
+- Planner action validation reuses Part 2's `DebugAction.from_dict` directly instead of a second hand-written schema, so "compatible with Part 2" is exact, not approximate.
+- Diagnosis schema (section 9) implemented unchanged, since the spec said to ask before changing it and there was no reason to.
+- Merged origin/master (Part 1 + Part 2 commits) into local master before starting; resolved trivial infra conflicts (.gitignore, HANDOFF.md, cyhi state.json) by taking origin's content where it was more complete.
 
 ## Don't retry
-- Don't reach for `regex` or `clap` in Part 1 — hand-rolled parsing avoids heavy external dependencies.
-- Do not use select() over buffered TextIOWrapper.readline(); it causes deadlocks due to Python internal buffer caching.
-- Do not let LLM generate arbitrary GDB commands; always validate through `DebugAction`.
+- Don't import `google.genai` at `tracecli_llm` module load time — it's deferred into `GeminiProvider.__init__`/`_call_once` so the test suite and any code just doing config loading never needs the SDK installed.
+- Don't let the planner's JSON-Schema alone gate action validity (Gemini's response_schema subset can't express Part 2's numeric ranges/regexes) — `DebugAction.from_dict` is the real gate, always run it.
+- Don't hand-roll a second retry policy for malformed structured output at the provider layer — that's a semantic/schema concern only `DebugPlanner`/`DiagnosisEngine` can correct via a re-prompt; the provider layer only retries transport-shaped failures.
