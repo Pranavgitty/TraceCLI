@@ -95,8 +95,14 @@ and 3 in-process as ordinary Python libraries.
 ```bash
 pip install -r requirements.txt
 export GEMINI_API_KEY=...   # only required for `diagnose`
-chmod +x tracecli            # no build step — Node runs it directly
+npm install -g .              # installs the `tracecli` bin from package.json
 ```
+
+`npm install -g .` (run from the repo root) is the supported install path —
+`package.json`'s `bin` field points at the `tracecli` script, so npm symlinks
+it onto your `PATH` as `tracecli`. For local development without a global
+install, `npm link` does the same thing, or invoke `./tracecli` directly from
+the repo root.
 
 `tracecli diagnose` must currently be run from the repository root (or with
 `PYTHONPATH` pointing at it), so `python3 -m tracecli_orchestrator` can find
