@@ -1,0 +1,16 @@
+{
+  "name": "tracecli",
+  "version": "0.1.0",
+  "description": "TraceCLI Part 1 (Error & Project Context Layer) + Part 4's CLI dispatcher, in JavaScript.",
+  "bin": {
+    "tracecli": "./tracecli"
+  },
+  "scripts": {
+    "test": "node --test tests/js/test_main.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "private": true
+}

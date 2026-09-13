@@ -17,9 +17,9 @@ Covers, without needing a live LLM API key (mocked `DebugPlanner`/
 11. trace generation               -> test_trace_is_valid_jsonl (exercised by every case above too)
 
 Plus a real, unmocked CLI smoke test (`test_cli_diagnose_on_successful_program`)
-that builds the actual `tracecli` binary and runs `tracecli diagnose` on a
+that runs the actual `tracecli` script (Node.js) via `tracecli diagnose` on a
 program that exits 0 -- this path never touches GDB or the LLM, so it needs
-no external tooling beyond a C++ compiler and `cargo`.
+no external tooling beyond Node.js.
 """
 from __future__ import annotations
 
@@ -387,17 +387,16 @@ class OrchestrateRealDebuggerTests(unittest.TestCase):
         self.assertTrue(len(result.evidence) > 0)
 
 
-@unittest.skipIf(not shutil.which("cargo"), "cargo not installed")
+@unittest.skipIf(not shutil.which("node"), "node not installed")
 class CliDiagnoseSmokeTest(unittest.TestCase):
-    """Builds the real `tracecli` binary and runs `tracecli diagnose` on a
+    """Runs the real `tracecli` script and `tracecli diagnose` on a
     program that exits 0. This path never reaches GDB or the LLM (the
     orchestrator short-circuits on `success`), so it needs no API key and
     no `gdb` on the test machine."""
 
     @classmethod
     def setUpClass(cls):
-        subprocess.run(["cargo", "build", "--quiet"], cwd=REPO_ROOT, check=True)
-        cls.tracecli_bin = os.path.join(REPO_ROOT, "target", "debug", "tracecli")
+        cls.tracecli_bin = os.path.join(REPO_ROOT, "tracecli")
 
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp()

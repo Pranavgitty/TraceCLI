@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const { parseArgs, parseDiagnoseArgs } = require('./src/cli');
+const { executeTarget } = require('./src/execution');
+const { collectErrorContext } = require('./src/errorContext');
+const { traceErrorToString } = require('./src/errors');
+
+// tracecli's own exit code when it cannot even attempt to run the target
+// (bad arguments, missing executable, etc.) -- distinct from any exit code
+// the target program itself might produce.
+const TRACECLI_ERROR_EXIT = 2;
+
+// Exit code for a `diagnose` pipeline failure (planner/debugger/diagnosis
+// unavailable, or the orchestrator itself couldn't be launched) -- distinct
+// from TRACECLI_ERROR_EXIT so a broken investigation is distinguishable
+// from a bad CLI invocation.
+const DIAGNOSE_PIPELINE_ERROR_EXIT = 3;
+
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+// `tracecli run ...` -- Part 1's original, unmodified pipeline.
+function runMain(args) {
+  const parsed = parseArgs(args);
+  if (!parsed.ok) {
+    process.stderr.write(`tracecli: ${traceErrorToString(parsed.error)}\n`);
+    process.stderr.write('usage: tracecli run [--context-lines N] <executable> [args...]\n');
+    process.stderr.write('       tracecli diagnose [--context-lines N] <executable> [args...]\n');
+    return TRACECLI_ERROR_EXIT;
+  }
+  const { executable, targetArguments, contextLines } = parsed.value;
+
+  const executionResult = executeTarget({ executable, arguments: targetArguments });
+  if (!executionResult.ok) {
+    process.stderr.write(`tracecli: ${traceErrorToString(executionResult.error)}\n`);
+    return TRACECLI_ERROR_EXIT;
+  }
+  const execution = executionResult.value;
+
+  const config = {};
+  if (contextLines !== undefined) {
+    config.sourceContext = { contextLines };
+  }
+
+  const exitSignal = execution.signal ? execution.signal.number : undefined;
+  const exitCode = execution.exit_code;
+
+  const contextResult = collectErrorContext(execution, config);
+  if (!contextResult.ok) {
+    process.stderr.write(`tracecli: ${traceErrorToString(contextResult.error)}\n`);
+    return TRACECLI_ERROR_EXIT;
+  }
+
+  process.stdout.write(`${JSON.stringify(contextResult.value, null, 2)}\n`);
+
+  // Mirror the target's own exit status so tracecli behaves naturally in
+  // shell scripts: same exit code, or the conventional 128+signal when the
+  // target was killed by a signal.
+  if (exitCode !== null && exitCode !== undefined) {
+    return clamp(exitCode & 0xff, 0, 255);
+  }
+  if (exitSignal !== undefined) {
+    return clamp(128 + exitSignal, 0, 255);
+  }
+  return TRACECLI_ERROR_EXIT;
+}
+
+// `tracecli diagnose ...` (Part 4). Hands off to the Python orchestrator
+// (tracecli_orchestrator), which drives Part 2 (tracecli_debugger) and
+// Part 3 (tracecli_llm) in-process as Python libraries -- no FFI, no
+// duplicated pipeline. This process's own path is passed through
+// TRACECLI_BIN so the orchestrator's first step (re-invoking `tracecli
+// run` to get the ErrorContext JSON) never depends on PATH.
+function diagnoseMain(args) {
+  const parsed = parseDiagnoseArgs(args);
+  if (!parsed.ok) {
+    process.stderr.write(`tracecli: ${traceErrorToString(parsed.error)}\n`);
+    process.stderr.write('usage: tracecli diagnose [--context-lines N] <executable> [args...]\n');
+    return TRACECLI_ERROR_EXIT;
+  }
+  const { executable, targetArguments, contextLines } = parsed.value;
+
+  const pythonArgs = ['-m', 'tracecli_orchestrator'];
+  if (contextLines !== undefined) {
+    pythonArgs.push('--context-lines', String(contextLines));
+  }
+  pythonArgs.push('--', executable, ...targetArguments);
+
+  let tracecliBin;
+  try {
+    tracecliBin = fs.realpathSync(__filename);
+  } catch {
+    tracecliBin = path.resolve(__filename);
+  }
+
+  const result = spawnSync('python3', pythonArgs, {
+    stdio: 'inherit',
+    env: { ...process.env, TRACECLI_BIN: tracecliBin },
+  });
+
+  if (result.error) {
+    process.stderr.write(
+      `tracecli: failed to launch the debugging orchestrator (python3): ${result.error.message}\n`
+    );
+    process.stderr.write(
+      "tracecli: 'diagnose' requires Python 3.11+ with tracecli_orchestrator importable " +
+        '(run from the repository root, or set PYTHONPATH)\n'
+    );
+    return DIAGNOSE_PIPELINE_ERROR_EXIT;
+  }
+
+  if (result.status !== null) return clamp(result.status, 0, 255);
+  return 1;
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  if (args[0] === 'diagnose') {
+    process.exitCode = diagnoseMain(args);
+  } else {
+    process.exitCode = runMain(args);
+  }
+}
+
+main();

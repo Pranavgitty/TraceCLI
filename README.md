@@ -62,10 +62,10 @@ without changing one another's public contracts:
 
 | Part | Language | Package | Responsibility |
 |---|---|---|---|
-| 1 | Rust | `tracecli` (this crate) | Run the target, capture stdout/stderr/exit/signal, classify the failure, extract source context — produces `ErrorContext` |
+| 1 | JavaScript (Node.js) | `tracecli` (this script) | Run the target, capture stdout/stderr/exit/signal, classify the failure, extract source context — produces `ErrorContext` |
 | 2 | Python | `tracecli_debugger` | Structured `DebugAction` → GDB (via MI2) → structured `Evidence`, with strict input validation |
 | 3 | Python | `tracecli_llm` | `ErrorContext` (+ evidence) → `DebugPlanner` (LLM #1, decides what to inspect next) and `DiagnosisEngine` (LLM #2, produces the final root cause / evidence / fix / confidence) |
-| 4 | Python + Rust | `tracecli_orchestrator` + `tracecli diagnose` | Runs the iterative Planner ⇄ Debugger loop under hard safety limits, writes the canonical trace, renders the terminal report |
+| 4 | Python + JavaScript | `tracecli_orchestrator` + `tracecli diagnose` | Runs the iterative Planner ⇄ Debugger loop under hard safety limits, writes the canonical trace, renders the terminal report |
 
 ```
 ErrorContext ──▶ Planner ──▶ Debugger ──▶ Evidence ──┐
@@ -85,7 +85,7 @@ and 3 in-process as ordinary Python libraries.
 
 ## Requirements
 
-- Rust (edition 2024) and `cargo`
+- Node.js 18+ (no npm dependencies — `tracecli` is a plain script)
 - Python 3.11+ (for `tomllib`)
 - `gdb` on `PATH`
 - A C++ compiler (`g++`/`clang++`) if you want to build the test fixtures
@@ -95,7 +95,7 @@ and 3 in-process as ordinary Python libraries.
 ```bash
 pip install -r requirements.txt
 export GEMINI_API_KEY=...   # only required for `diagnose`
-cargo build --release
+chmod +x tracecli            # no build step — Node runs it directly
 ```
 
 `tracecli diagnose` must currently be run from the repository root (or with
@@ -209,21 +209,26 @@ export of a trace is available via `tracecli_orchestrator.trace.export_json`.
 
 ```
 TraceCLI/
-├── src/                      # Part 1: Rust — Error & Project Context Layer
-│   ├── main.rs, cli.rs       #   `run` and `diagnose` CLI dispatch
-│   ├── execution.rs          #   spawns the target, captures stdout/stderr/exit/signal
-│   ├── error_context.rs      #   assembles the stable ErrorContext JSON contract
-│   ├── classification.rs     #   coarse failure classification (segfault, abort, ...)
-│   ├── signal.rs             #   POSIX signal naming
-│   ├── source_context.rs     #   bounded source excerpt around a failure
-│   ├── source_location.rs    #   extracts file:line from compiler/runtime output
-│   └── build_context.rs      #   best-effort compiler/debug-symbol detection
+├── tracecli                   # Part 1: JavaScript — CLI entry point (`run`/`diagnose` dispatch)
+├── src/                      # Part 1: JavaScript — Error & Project Context Layer
+│   ├── execution.js          #   spawns the target, captures stdout/stderr/exit/signal
+│   ├── errorContext.js       #   assembles the stable ErrorContext JSON contract
+│   ├── classification.js     #   coarse failure classification (segfault, abort, ...)
+│   ├── signal.js             #   POSIX signal naming (via Node's os.constants.signals)
+│   ├── sourceContext.js      #   bounded source excerpt around a failure
+│   ├── sourceLocation.js     #   extracts file:line from compiler/runtime output
+│   ├── buildContext.js       #   best-effort compiler/debug-symbol detection
+│   ├── cli.js                #   argument parsing
+│   ├── errors.js             #   structured TraceError variants
+│   └── textUtil.js           #   Rust-`str`-semantics string helpers (splitn, .lines(), ...)
 ├── tracecli_debugger/         # Part 2: Python — structured actions/evidence over GDB
 ├── tracecli_llm/               # Part 3: Python — LLM planner + diagnosis engine
 ├── tracecli_orchestrator/     # Part 4: Python — the diagnose loop, trace, terminal UX
 ├── tests/
+│   ├── js/test_main.js       # Part 1's own test suite (node:test, no framework dep)
 │   ├── test_debugger.py, test_llm_*.py, test_orchestrator.py
 │   └── fixtures/             # C++ programs used by the test suites
+├── package.json                # no dependencies — documents the `tracecli` bin + npm test script
 └── tracecli.toml              # shared, optional configuration
 ```
 
@@ -232,7 +237,7 @@ TraceCLI/
 ## Running the tests
 
 ```bash
-cargo test                                              # Part 1
+npm test                                                # Part 1 (node --test)
 python3 -m unittest discover -s tests -p "test_llm_*.py" # Part 3 (mocked, no API key needed)
 python3 -m unittest tests.test_debugger                  # Part 2 (needs real gdb)
 python3 -m unittest tests.test_orchestrator              # Part 4 (mocked + real-gdb + real-CLI cases)

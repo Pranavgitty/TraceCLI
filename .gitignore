@@ -1,6 +1,6 @@
 cyhi-logs/.local/
 .claude/settings.local.json
-/target/
+node_modules/
 __pycache__/
 *.pyc
 tests/fixtures/nested_calls
