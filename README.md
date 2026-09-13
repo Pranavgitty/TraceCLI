@@ -151,12 +151,12 @@ api_key_env = "GEMINI_API_KEY"   # never the key itself
 
 [llm.planner]
 provider = "gemini"
-model = "gemini-2.5-flash-lite"
+model = "gemini-3.5-flash-lite"
 temperature = 0.0
 
 [llm.diagnosis]
 provider = "gemini"
-model = "gemini-2.5-flash"
+model = "gemini-3.5-flash"
 temperature = 0.1
 ```
 
